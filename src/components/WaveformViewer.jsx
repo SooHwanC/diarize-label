@@ -29,7 +29,8 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
     regionsPlugin,
     playRegionLoop,
     stopRegionLoop,
-    loopingRegionId
+    loopingRegionId,
+    loadRegions
   } = useWaveSurfer(
     containerRef,
     audioFile,
@@ -62,7 +63,9 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
     getRegionById,
     playRegionLoop,
     stopRegionLoop,
-    loopingRegionId
+    loopingRegionId,
+    stop,
+    loadRegions
   }));
 
   useEffect(() => {

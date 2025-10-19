@@ -155,6 +155,18 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     wavesurferRef.current = wavesurfer;
 
     return () => {
+      // 반복 재생 정리
+      if (loopIntervalRef.current && wavesurfer) {
+        wavesurfer.un('audioprocess', loopIntervalRef.current);
+        loopIntervalRef.current = null;
+      }
+      setLoopingRegionId(null);
+      
+      // 재생 중지
+      if (wavesurfer) {
+        wavesurfer.stop();
+      }
+      
       // 이벤트 리스너 제거
       if (eventListenersRef.current) {
         const { container, handleMouseDown, handleMouseMove, handleMouseUp } = eventListenersRef.current;
@@ -169,6 +181,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       
       // WaveSurfer 인스턴스 제거
       wavesurfer.destroy();
+      wavesurferRef.current = null;
     };
   }, [audioFile]);
 
@@ -180,7 +193,12 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
 
   const stop = () => {
     if (wavesurferRef.current) {
+      // 반복 재생 중지
+      stopRegionLoop();
+      // 재생 중지
       wavesurferRef.current.stop();
+      // 재생 위치를 처음으로
+      wavesurferRef.current.seekTo(0);
       setIsPlaying(false);
     }
   };
@@ -276,6 +294,45 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     return regionData ? regionData.regionObject : null;
   };
 
+  // 기존 구간 데이터 불러오기
+  const loadRegions = (regionsData, speakersMap) => {
+    if (!regionsPluginRef.current) return;
+
+    // 기존 구간 모두 제거
+    clearAllRegions();
+
+    // 새 구간 추가
+    regionsData.forEach(regionData => {
+      const speaker = speakersMap.get(regionData.speakerId);
+      if (!speaker) return; // 화자가 없으면 스킵
+
+      const regionId = regionData.id || `region-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      const confirmedRegion = regionsPluginRef.current.addRegion({
+        id: regionId,
+        start: regionData.start,
+        end: regionData.end,
+        color: speaker.color + '80',
+        drag: false,
+        resize: true
+      });
+
+      // 화자 정보 추가
+      confirmedRegion.speakerId = speaker.id;
+      confirmedRegion.speakerName = speaker.name;
+
+      // Map에 저장
+      confirmedRegionsMapRef.current.set(regionId, {
+        id: regionId,
+        start: regionData.start,
+        end: regionData.end,
+        speakerId: speaker.id,
+        speakerName: speaker.name,
+        regionObject: confirmedRegion
+      });
+    });
+  };
+
   const playRegionLoop = (regionId) => {
     const regionData = confirmedRegionsMapRef.current.get(regionId);
     if (!regionData || !wavesurferRef.current) return;
@@ -308,6 +365,10 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       wavesurferRef.current.un('audioprocess', loopIntervalRef.current);
       loopIntervalRef.current = null;
     }
+    // 반복 재생 중지 시 오디오도 일시정지
+    if (wavesurferRef.current && wavesurferRef.current.isPlaying()) {
+      wavesurferRef.current.pause();
+    }
     setLoopingRegionId(null);
   };
 
@@ -335,6 +396,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     cancelRegion,
     playRegionLoop,
     stopRegionLoop,
-    loopingRegionId
+    loopingRegionId,
+    loadRegions
   };
 };
