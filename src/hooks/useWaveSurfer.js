@@ -13,6 +13,15 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
   const dragStartRef = useRef(null);
   const tempRegionRef = useRef(null);
   const confirmedRegionsMapRef = useRef(new Map()); // 확정된 region들을 직접 관리
+  const onRegionCreatedRef = useRef(onRegionCreated); // ref로 감싸기
+  const eventListenersRef = useRef(null); // 이벤트 리스너 저장
+  const [loopingRegionId, setLoopingRegionId] = useState(null); // 반복 재생 중인 구간 ID
+  const loopIntervalRef = useRef(null); // 반복 재생 interval
+  
+  // onRegionCreated 업데이트
+  useEffect(() => {
+    onRegionCreatedRef.current = onRegionCreated;
+  }, [onRegionCreated]);
 
   useEffect(() => {
     if (!containerRef.current || !audioFile) return;
@@ -22,11 +31,14 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       waveColor: '#60a5fa',
       progressColor: '#3b82f6',
       cursorColor: '#ef4444',
+      cursorWidth: 2,
       barWidth: 2,
       barGap: 1,
       height: 200,
       normalize: true,
-      backend: 'WebAudio'
+      backend: 'WebAudio',
+      interact: true,
+      hideScrollbar: false
     });
 
     const regions = wavesurfer.registerPlugin(RegionsPlugin.create());
@@ -39,6 +51,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       setDuration(audioDuration);
       
       const container = containerRef.current;
+      if (!container) return;
       
       const handleMouseDown = (e) => {
         if (e.target.classList.contains('wavesurfer-region') || 
@@ -59,6 +72,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       
       const handleMouseMove = (e) => {
         if (!isDraggingRef.current || !dragStartRef.current) return;
+        if (!regionsPluginRef.current) return; // regions가 있는지 확인
         
         const rect = container.getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -73,10 +87,10 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
             tempRegionRef.current.remove();
           }
           
-          tempRegionRef.current = regions.addRegion({
+          tempRegionRef.current = regionsPluginRef.current.addRegion({
             start: start,
             end: end,
-            color: 'rgba(156, 163, 175, 0.4)',
+            color: 'rgba(59, 130, 246, 0.3)',
             drag: false,
             resize: false
           });
@@ -91,10 +105,10 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
         if (tempRegionRef.current && tempRegionRef.current.end - tempRegionRef.current.start > 0.1) {
           const region = tempRegionRef.current;
           
-          if (onRegionCreated) {
+          if (onRegionCreatedRef.current && container) {
             const rect = container.getBoundingClientRect();
             const regionCenter = rect.left + ((region.start + region.end) / 2 / audioDuration) * rect.width;
-            onRegionCreated(region, {
+            onRegionCreatedRef.current(region, {
               x: regionCenter,
               y: rect.top
             });
@@ -108,28 +122,32 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
         }
       };
       
+      // 이벤트 리스너 저장
+      eventListenersRef.current = {
+        container,
+        handleMouseDown,
+        handleMouseMove,
+        handleMouseUp
+      };
+      
       container.addEventListener('mousedown', handleMouseDown);
       container.addEventListener('mousemove', handleMouseMove);
       container.addEventListener('mouseup', handleMouseUp);
       document.addEventListener('mouseup', handleMouseUp);
-      
-      return () => {
-        container.removeEventListener('mousedown', handleMouseDown);
-        container.removeEventListener('mousemove', handleMouseMove);
-        container.removeEventListener('mouseup', handleMouseUp);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
     });
 
     wavesurfer.on('audioprocess', (time) => {
       setCurrentTime(time);
     });
 
+    wavesurfer.on('seek', (progress) => {
+      setCurrentTime(progress * wavesurfer.getDuration());
+    });
+
     wavesurfer.on('play', () => setIsPlaying(true));
     wavesurfer.on('pause', () => setIsPlaying(false));
 
     regions.on('region-double-clicked', (region) => {
-      console.log('[region-double-clicked] Removing:', region.id);
       confirmedRegionsMapRef.current.delete(region.id);
       region.remove();
     });
@@ -137,9 +155,22 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     wavesurferRef.current = wavesurfer;
 
     return () => {
+      // 이벤트 리스너 제거
+      if (eventListenersRef.current) {
+        const { container, handleMouseDown, handleMouseMove, handleMouseUp } = eventListenersRef.current;
+        if (container) {
+          container.removeEventListener('mousedown', handleMouseDown);
+          container.removeEventListener('mousemove', handleMouseMove);
+          container.removeEventListener('mouseup', handleMouseUp);
+        }
+        document.removeEventListener('mouseup', handleMouseUp);
+        eventListenersRef.current = null;
+      }
+      
+      // WaveSurfer 인스턴스 제거
       wavesurfer.destroy();
     };
-  }, [audioFile, containerRef, onRegionCreated]);
+  }, [audioFile]);
 
   const playPause = () => {
     if (wavesurferRef.current) {
@@ -161,14 +192,10 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
   };
 
   const confirmRegion = (speakerId, speakerName, speakerColor) => {
-    console.log('[confirmRegion] Start');
-    
     if (tempRegionRef.current && regionsPluginRef.current) {
       const tempRegion = tempRegionRef.current;
       const start = tempRegion.start;
       const end = tempRegion.end;
-      
-      console.log('[confirmRegion] Temp region:', start, '-', end);
       
       // 임시 region 제거
       tempRegion.remove();
@@ -183,7 +210,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
         start: start,
         end: end,
         color: speakerColor + '80',
-        drag: true,
+        drag: false,
         resize: true
       });
       
@@ -201,19 +228,13 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
         regionObject: confirmedRegion
       });
       
-      console.log('[confirmRegion] Region confirmed:', regionId);
-      console.log('[confirmRegion] Map size:', confirmedRegionsMapRef.current.size);
-      console.log('[confirmRegion] Map contents:', Array.from(confirmedRegionsMapRef.current.keys()));
-      
       return true;
     }
     
-    console.log('[confirmRegion] Failed - no temp region');
     return false;
   };
 
   const cancelRegion = () => {
-    console.log('[cancelRegion] Cancelling temp region');
     if (tempRegionRef.current) {
       tempRegionRef.current.remove();
       tempRegionRef.current = null;
@@ -222,8 +243,6 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
   };
 
   const getRegions = () => {
-    console.log('[getRegions] Map size:', confirmedRegionsMapRef.current.size);
-    
     // Map에서 직접 반환
     const regions = Array.from(confirmedRegionsMapRef.current.values()).map(r => ({
       id: r.id,
@@ -233,13 +252,10 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
       speakerName: r.speakerName
     }));
     
-    console.log('[getRegions] Returning regions:', regions.length);
     return regions;
   };
 
   const clearAllRegions = () => {
-    console.log('[clearAllRegions] Clearing all regions');
-    
     // Map의 모든 region 제거
     confirmedRegionsMapRef.current.forEach(r => {
       if (r.regionObject) {
@@ -260,19 +276,65 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     return regionData ? regionData.regionObject : null;
   };
 
+  const playRegionLoop = (regionId) => {
+    const regionData = confirmedRegionsMapRef.current.get(regionId);
+    if (!regionData || !wavesurferRef.current) return;
+
+    // 기존 반복 정지
+    stopRegionLoop();
+
+    const { start, end } = regionData;
+    
+    // 구간 시작 위치로 이동하고 재생
+    wavesurferRef.current.seekTo(start / duration);
+    wavesurferRef.current.play();
+    setLoopingRegionId(regionId);
+
+    // audioprocess 이벤트로 반복 체크
+    const handleAudioProcess = (time) => {
+      if (time >= end) {
+        wavesurferRef.current.seekTo(start / duration);
+      }
+    };
+
+    wavesurferRef.current.on('audioprocess', handleAudioProcess);
+    
+    // cleanup을 위해 저장
+    loopIntervalRef.current = handleAudioProcess;
+  };
+
+  const stopRegionLoop = () => {
+    if (loopIntervalRef.current && wavesurferRef.current) {
+      wavesurferRef.current.un('audioprocess', loopIntervalRef.current);
+      loopIntervalRef.current = null;
+    }
+    setLoopingRegionId(null);
+  };
+
+  const playPauseWithLoopStop = () => {
+    // 반복 재생 중이면 중지
+    if (loopingRegionId) {
+      stopRegionLoop();
+    }
+    playPause();
+  };
+
   return {
     wavesurfer: wavesurferRef.current,
     regionsPlugin: regionsPluginRef.current,
     isPlaying,
     currentTime,
     duration,
-    playPause,
+    playPause: playPauseWithLoopStop,
     stop,
     zoom,
     getRegions,
     clearAllRegions,
     getRegionById,
     confirmRegion,
-    cancelRegion
+    cancelRegion,
+    playRegionLoop,
+    stopRegionLoop,
+    loopingRegionId
   };
 };

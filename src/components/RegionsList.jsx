@@ -1,4 +1,4 @@
-export const RegionsList = ({ regions, speakers, onPlayRegion, onDeleteRegion }) => {
+export const RegionsList = ({ regions, speakers, onPlayRegion, onDeleteRegion, loopingRegionId }) => {
     const sortedRegions = [...regions].sort((a, b) => a.start - b.start);
   
     return (
@@ -15,15 +15,20 @@ export const RegionsList = ({ regions, speakers, onPlayRegion, onDeleteRegion })
           <div className="space-y-3">
             {sortedRegions.map((region, index) => {
               const speaker = speakers.find(s => s.id === region.speakerId);
+              const isLooping = loopingRegionId === region.id;
+              
               return (
                 <div
                   key={region.id}
-                  className="bg-gray-50 rounded-lg p-4 flex justify-between items-center border-l-4 hover:bg-gray-100 transition-colors"
-                  style={{ borderLeftColor: speaker?.color }}
+                  className={`rounded-lg p-4 flex justify-between items-center border-l-4 transition-colors ${
+                    isLooping ? 'bg-blue-50 border-blue-500' : 'bg-gray-50 hover:bg-gray-100'
+                  }`}
+                  style={{ borderLeftColor: isLooping ? undefined : speaker?.color }}
                 >
                   <div className="flex-1">
-                    <div className="font-semibold mb-1" style={{ color: speaker?.color }}>
+                    <div className="font-semibold mb-1 flex items-center gap-2" style={{ color: speaker?.color }}>
                       {speaker?.name}
+                      {isLooping && <span className="text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded">🔁 반복 재생 중</span>}
                     </div>
                     <div className="text-gray-600 text-sm">
                       {region.start.toFixed(2)}s ~ {region.end.toFixed(2)}s
@@ -32,10 +37,14 @@ export const RegionsList = ({ regions, speakers, onPlayRegion, onDeleteRegion })
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => onPlayRegion(region)}
-                      className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                      onClick={() => onPlayRegion(region.id)}
+                      className={`px-4 py-2 rounded-lg transition-colors font-semibold ${
+                        isLooping 
+                          ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                          : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                      }`}
                     >
-                      재생
+                      {isLooping ? '⏸ 정지' : '🔁 반복재생'}
                     </button>
                     <button
                       onClick={() => onDeleteRegion(region.id)}

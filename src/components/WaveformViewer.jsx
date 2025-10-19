@@ -4,7 +4,7 @@ import { useWaveSurfer } from '../hooks/useWaveSurfer';
 import { formatTime } from '../utils/audioUtils';
 import { SpeakerPopup } from './SpeakerPopup';
 
-export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange }, ref) => {
+export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange, onLoopingChange }, ref) => {
   const containerRef = useRef(null);
   const [popupPosition, setPopupPosition] = useState(null);
   const [pendingRegion, setPendingRegion] = useState(null);
@@ -26,7 +26,10 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
     getRegionById,
     confirmRegion,
     cancelRegion,
-    regionsPlugin
+    regionsPlugin,
+    playRegionLoop,
+    stopRegionLoop,
+    loopingRegionId
   } = useWaveSurfer(
     containerRef,
     audioFile,
@@ -56,7 +59,10 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
   useImperativeHandle(ref, () => ({
     getRegions,
     clearAllRegions,
-    getRegionById
+    getRegionById,
+    playRegionLoop,
+    stopRegionLoop,
+    loopingRegionId
   }));
 
   useEffect(() => {
@@ -82,6 +88,13 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
       regionsPlugin.un('region-removed', handleRemoved);
     };
   }, [regionsPlugin, onRegionsChange]);
+
+  // loopingRegionId 변경 감지
+  useEffect(() => {
+    if (onLoopingChange) {
+      onLoopingChange(loopingRegionId);
+    }
+  }, [loopingRegionId, onLoopingChange]);
 
   // 겹치는 구간 찾기
   const findOverlaps = (regions) => {
@@ -111,13 +124,28 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
 
   const confirmedRegions = getRegions();
   const overlaps = findOverlaps(confirmedRegions);
+  const loopingRegion = loopingRegionId ? confirmedRegions.find(r => r.id === loopingRegionId) : null;
+  const loopingSpeaker = loopingRegion ? speakers.find(s => s.id === loopingRegion.speakerId) : null;
 
   if (!audioFile) return null;
 
   return (
     <>
       <div className="bg-white rounded-xl p-6 mb-6 shadow-sm border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4 text-gray-900">웨이브폼</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-gray-900">웨이브폼</h2>
+          {loopingRegion && loopingSpeaker && (
+            <div className="flex items-center gap-2 bg-blue-50 px-4 py-2 rounded-lg border border-blue-200">
+              <span className="text-blue-600 font-semibold">🔁 {loopingSpeaker.name} 구간 반복 중</span>
+              <button
+                onClick={stopRegionLoop}
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+              >
+                중지
+              </button>
+            </div>
+          )}
+        </div>
         
         <div className="bg-blue-50 p-4 rounded-lg mb-5 border border-blue-200">
           <strong className="text-gray-900">사용 방법:</strong>
@@ -211,13 +239,13 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
             onClick={playPause}
             className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:-translate-y-0.5 transition-transform font-semibold"
           >
-            {isPlaying ? '정지' : '재생'}
+            {isPlaying ? '⏸ 일시정지' : '▶ 재생'}
           </button>
           <button
             onClick={stop}
-            className="px-6 py-2.5 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors font-semibold"
+            className="px-6 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-semibold"
           >
-            정지
+            ⏹ 정지
           </button>
           <div className="font-mono text-gray-600">
             {formatTime(currentTime)} / {formatTime(duration)}

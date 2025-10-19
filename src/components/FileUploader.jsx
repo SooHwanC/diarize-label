@@ -5,10 +5,10 @@ export const FileUploader = ({ onFileLoad, fileName }) => {
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
-    if (file && file.type === 'audio/wav') {
+    if (file && file.type.startsWith('audio/')) {
       onFileLoad(file);
     } else if (file) {
-      alert('WAV 파일만 업로드 가능합니다.');
+      alert('오디오 파일만 업로드 가능합니다.');
     }
   };
 
@@ -27,10 +27,10 @@ export const FileUploader = ({ onFileLoad, fileName }) => {
     setIsDragging(false);
     
     const file = e.dataTransfer.files[0];
-    if (file && file.type === 'audio/wav') {
+    if (file && file.type.startsWith('audio/')) {
       onFileLoad(file);
     } else if (file) {
-      alert('WAV 파일만 업로드 가능합니다.');
+      alert('오디오 파일만 업로드 가능합니다.');
     }
   };
 
@@ -48,7 +48,7 @@ export const FileUploader = ({ onFileLoad, fileName }) => {
       <input
         type="file"
         id="audioFile"
-        accept="audio/wav"
+        accept="audio/*"
         onChange={handleFileChange}
         className="hidden"
       />
@@ -56,7 +56,7 @@ export const FileUploader = ({ onFileLoad, fileName }) => {
         htmlFor="audioFile"
         className="inline-block px-10 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg cursor-pointer font-semibold text-lg hover:-translate-y-0.5 transition-transform"
       >
-        WAV 파일 선택
+        오디오 파일 선택
       </label>
       <div className="mt-3 text-gray-500 text-sm">
         또는 파일을 드래그 앤 드롭하세요

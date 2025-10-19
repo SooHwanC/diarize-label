@@ -12,6 +12,7 @@ function App() {
   const [fileName, setFileName] = useState('');
   const [fileIndex, setFileIndex] = useState(1);
   const [regions, setRegions] = useState([]);
+  const [loopingRegionId, setLoopingRegionId] = useState(null);
   const waveformRef = useRef(null);
   
   const { speakers, selectedSpeaker, setSelectedSpeaker, addSpeaker, deleteSpeaker } = useSpeakers();
@@ -23,11 +24,8 @@ function App() {
   };
 
   const handleRegionsChange = useCallback(() => {
-    console.log('[App] handleRegionsChange called');
-    
     if (waveformRef.current && waveformRef.current.getRegions) {
       const allRegions = waveformRef.current.getRegions();
-      console.log('[App] Got regions from waveform:', allRegions.length);
       
       const currentRegions = allRegions
         .filter(region => !!region.speakerId)
@@ -39,22 +37,33 @@ function App() {
           speakerName: region.speakerName
         }));
       
-      console.log('[App] Filtered regions:', currentRegions.length);
-      console.log('[App] Setting regions state:', currentRegions);
       setRegions([...currentRegions]);
     }
   }, []);
 
-  const handlePlayRegion = (region) => {
-    if (waveformRef.current && waveformRef.current.getRegionById) {
-      const wavesurferRegion = waveformRef.current.getRegionById(region.id);
-      if (wavesurferRegion) {
-        wavesurferRegion.play();
+  const handlePlayRegion = (regionId) => {
+    if (waveformRef.current && waveformRef.current.playRegionLoop) {
+      // 같은 구간을 다시 클릭하면 반복 정지
+      if (loopingRegionId === regionId) {
+        waveformRef.current.stopRegionLoop();
+        setLoopingRegionId(null);
+      } else {
+        // 새로운 구간 반복 재생
+        waveformRef.current.playRegionLoop(regionId);
+        setLoopingRegionId(regionId);
       }
     }
   };
 
   const handleDeleteRegion = (regionId) => {
+    // 삭제하려는 구간이 반복 재생 중이면 먼저 중지
+    if (loopingRegionId === regionId) {
+      if (waveformRef.current && waveformRef.current.stopRegionLoop) {
+        waveformRef.current.stopRegionLoop();
+      }
+      setLoopingRegionId(null);
+    }
+    
     if (waveformRef.current && waveformRef.current.getRegionById) {
       const wavesurferRegion = waveformRef.current.getRegionById(regionId);
       if (wavesurferRegion) {
@@ -123,6 +132,7 @@ function App() {
               audioFile={audioFile}
               speakers={speakers}
               onRegionsChange={handleRegionsChange}
+              onLoopingChange={setLoopingRegionId}
             />
 
             <RegionsList
@@ -130,6 +140,7 @@ function App() {
               speakers={speakers}
               onPlayRegion={handlePlayRegion}
               onDeleteRegion={handleDeleteRegion}
+              loopingRegionId={loopingRegionId}
             />
 
             <SavePanel
