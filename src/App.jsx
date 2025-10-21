@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { FolderSelector } from './components/FolderSelector';
 import { FileList } from './components/FileList';
 import { SpeakerSelector } from './components/SpeakerSelector';
@@ -7,7 +7,7 @@ import { RegionsList } from './components/RegionsList';
 import { SavePanel } from './components/SavePanel';
 import { useSpeakers } from './hooks/useSpeakers';
 import { generateRTTM } from './utils/rttmExporter';
-import { selectFolder, getAudioFilesFromFolder, saveToDatasetFolder, loadExistingRTTM } from './utils/fileSystemUtils';
+import { selectFolder, getAudioFilesFromFolder, saveToDatasetFolder, loadExistingRTTM, getCompletedFiles } from './utils/fileSystemUtils';
 import { parseRTTM, mapSpeakersToRegions } from './utils/rttmParser';
 
 function App() {
@@ -17,6 +17,9 @@ function App() {
   const [audioFiles, setAudioFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(null);
   const [completedFiles, setCompletedFiles] = useState(new Set());
+  const [skippedFiles, setSkippedFiles] = useState(new Set()); // 스킵한 파일들
+  const [searchQuery, setSearchQuery] = useState(''); // 검색어
+  const [filterStatus, setFilterStatus] = useState('all'); // all, completed, pending, skipped
   
   // 현재 작업 중인 파일 상태
   const [audioFile, setAudioFile] = useState(null);
@@ -34,12 +37,26 @@ function App() {
       const dirHandle = await selectFolder();
       if (!dirHandle) return; // 사용자가 취소
       
+      // 오디오 파일 목록 가져오기 (먼저 처리)
+      const files = await getAudioFilesFromFolder(dirHandle);
+      
+      // 완료된 파일 목록 복원
+      const completedBasenames = await getCompletedFiles(dirHandle);
+      const newCompletedFiles = new Set();
+      
+      // 오디오 파일명과 매칭 (확장자 제거해서 비교)
+      files.forEach(file => {
+        const baseName = file.name.replace(/\.[^/.]+$/, '');
+        if (completedBasenames.has(baseName)) {
+          newCompletedFiles.add(file.name);
+        }
+      });
+      
+      // 모든 데이터 준비 완료 후 한번에 상태 업데이트
       setFolderHandle(dirHandle);
       setFolderName(dirHandle.name);
-      
-      // 오디오 파일 목록 가져오기
-      const files = await getAudioFilesFromFolder(dirHandle);
       setAudioFiles(files);
+      setCompletedFiles(newCompletedFiles);
       
       if (files.length > 0) {
         // 첫 번째 파일 자동 선택
@@ -227,6 +244,57 @@ function App() {
     }
   };
 
+  // 파일 스킵 핸들러
+  const handleSkipFile = () => {
+    if (!fileName) return;
+    
+    const newSkippedFiles = new Set(skippedFiles);
+    
+    if (skippedFiles.has(fileName)) {
+      // 이미 스킵된 파일이면 스킵 해제
+      newSkippedFiles.delete(fileName);
+      setSkippedFiles(newSkippedFiles);
+    } else {
+      // 스킵 추가
+      newSkippedFiles.add(fileName);
+      setSkippedFiles(newSkippedFiles);
+      
+      // 다음 파일로 자동 이동
+      if (currentFileIndex !== null && currentFileIndex < audioFiles.length - 1) {
+        handleFileSelect(currentFileIndex + 1);
+      }
+    }
+  };
+
+  // 필터링된 파일 목록 계산 (useMemo로 최적화)
+  const filteredFiles = useMemo(() => {
+    let filtered = audioFiles;
+
+    // 검색어 필터링
+    if (searchQuery.trim()) {
+      const lowerQuery = searchQuery.toLowerCase();
+      filtered = filtered.filter(file => 
+        file.name.toLowerCase().includes(lowerQuery)
+      );
+    }
+
+    // 상태 필터링
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(file => {
+        if (filterStatus === 'completed') {
+          return completedFiles.has(file.name);
+        } else if (filterStatus === 'skipped') {
+          return skippedFiles.has(file.name);
+        } else if (filterStatus === 'pending') {
+          return !completedFiles.has(file.name) && !skippedFiles.has(file.name);
+        }
+        return true;
+      });
+    }
+
+    return filtered;
+  }, [audioFiles, searchQuery, filterStatus, completedFiles, skippedFiles]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
       {/* 헤더 */}
@@ -252,6 +320,34 @@ function App() {
       )}
 
       {/* 메인 레이아웃: 사이드바 + 작업 공간 */}
+      {folderHandle && audioFiles.length === 0 && (
+        <div className="max-w-4xl mx-auto p-8">
+          <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-8 text-center">
+            <div className="text-6xl mb-4">📂</div>
+            <h2 className="text-2xl font-bold text-yellow-800 mb-3">
+              오디오 파일이 없습니다
+            </h2>
+            <p className="text-yellow-700 mb-4">
+              선택한 폴더에서 오디오 파일을 찾을 수 없습니다.
+            </p>
+            <div className="bg-white rounded-lg p-4 mb-4 text-left">
+              <p className="text-sm text-gray-700 mb-2">
+                <strong>지원 형식:</strong> MP3, WAV, M4A, AAC, OGG, FLAC, WMA
+              </p>
+              <p className="text-sm text-gray-600">
+                이 형식의 파일이 폴더에 있는지 확인해주세요.
+              </p>
+            </div>
+            <button
+              onClick={handleFolderSelect}
+              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-semibold hover:-translate-y-0.5 transition-transform"
+            >
+              다른 폴더 선택
+            </button>
+          </div>
+        </div>
+      )}
+
       {audioFiles.length > 0 && (
         <div className="flex h-[calc(100vh-120px)]">
           {/* 왼쪽 사이드바 - 파일 목록 */}
@@ -273,10 +369,16 @@ function App() {
             
             <div className="flex-1 overflow-y-auto">
               <FileList
-                files={audioFiles}
+                files={filteredFiles}
+                allFiles={audioFiles}
                 currentFileIndex={currentFileIndex}
                 onFileSelect={handleFileSelect}
                 completedFiles={completedFiles}
+                skippedFiles={skippedFiles}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                filterStatus={filterStatus}
+                onFilterChange={setFilterStatus}
               />
             </div>
           </div>
@@ -314,10 +416,13 @@ function App() {
               regionCount={regions.length}
               onSave={handleSave}
               onClearAll={handleClearAll}
+              onSkip={handleSkipFile}
               currentFileIndex={currentFileIndex}
               totalFiles={audioFiles.length}
               completedCount={completedFiles.size}
+              skippedCount={skippedFiles.size}
               hasExistingLabel={hasExistingLabel}
+              isSkipped={skippedFiles.has(fileName)}
             />
               </div>
             ) : (

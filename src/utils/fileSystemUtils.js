@@ -117,6 +117,34 @@ export const loadExistingRTTM = async (dirHandle, fileName) => {
   }
 };
 
+// dataset 폴더에서 완료된 파일 목록 가져오기
+export const getCompletedFiles = async (dirHandle) => {
+  const completedSet = new Set();
+  
+  try {
+    // dataset/rttm 폴더 확인
+    const datasetHandle = await dirHandle.getDirectoryHandle('dataset', { create: false });
+    const rttmHandle = await datasetHandle.getDirectoryHandle('rttm', { create: false });
+    
+    // rttm 폴더의 모든 파일 스캔
+    for await (const entry of rttmHandle.values()) {
+      if (entry.kind === 'file' && entry.name.endsWith('.rttm')) {
+        // .rttm 제거한 파일명 추출
+        const baseName = entry.name.replace('.rttm', '');
+        completedSet.add(baseName);
+      }
+    }
+  } catch (err) {
+    // dataset 폴더가 없으면 빈 Set 반환
+    if (err.name === 'NotFoundError') {
+      return completedSet;
+    }
+    console.error('Error scanning completed files:', err);
+  }
+  
+  return completedSet;
+};
+
 // 파일 크기 포맷팅
 export const formatFileSize = (bytes) => {
   if (bytes === 0) return '0 Bytes';
