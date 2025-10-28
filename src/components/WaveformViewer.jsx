@@ -8,6 +8,12 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
   const containerRef = useRef(null);
   const [popupPosition, setPopupPosition] = useState(null);
   const [pendingRegion, setPendingRegion] = useState(null);
+  const onRegionsChangeRef = useRef(onRegionsChange);
+
+  // onRegionsChange 업데이트
+  useEffect(() => {
+    onRegionsChangeRef.current = onRegionsChange;
+  }, [onRegionsChange]);
 
   const handleRegionCreated = (region, position) => {
     setPendingRegion(region);
@@ -34,7 +40,8 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
   } = useWaveSurfer(
     containerRef,
     audioFile,
-    handleRegionCreated
+    handleRegionCreated,
+    onRegionsChangeRef
   );
 
   const handleSpeakerSelect = (speakerId) => {
@@ -72,25 +79,18 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
     if (!regionsPlugin) return;
 
     const handleUpdate = () => {
-      if (onRegionsChange) {
-        onRegionsChange();
+      if (onRegionsChangeRef.current) {
+        onRegionsChangeRef.current();
       }
     };
 
-    const handleRemoved = (region) => {
-      if (region.speakerId && onRegionsChange) {
-        onRegionsChange();
-      }
-    };
-
+    // region-updated는 여기서만 리스닝 (region-removed는 useWaveSurfer에서 처리)
     regionsPlugin.on('region-updated', handleUpdate);
-    regionsPlugin.on('region-removed', handleRemoved);
 
     return () => {
       regionsPlugin.un('region-updated', handleUpdate);
-      regionsPlugin.un('region-removed', handleRemoved);
     };
-  }, [regionsPlugin, onRegionsChange]);
+  }, [regionsPlugin]);
 
   // loopingRegionId 변경 감지
   useEffect(() => {

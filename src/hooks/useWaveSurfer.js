@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
 
-export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
+export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegionsChangeRef) => {
   const wavesurferRef = useRef(null);
   const regionsPluginRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -150,6 +150,21 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     regions.on('region-double-clicked', (region) => {
       confirmedRegionsMapRef.current.delete(region.id);
       region.remove();
+      // onRegionsChange 호출
+      if (onRegionsChangeRef && onRegionsChangeRef.current) {
+        onRegionsChangeRef.current();
+      }
+    });
+
+    regions.on('region-removed', (region) => {
+      // Map에서도 제거
+      if (region.id) {
+        confirmedRegionsMapRef.current.delete(region.id);
+      }
+      // onRegionsChange 호출하여 UI 업데이트
+      if (onRegionsChangeRef && onRegionsChangeRef.current) {
+        onRegionsChangeRef.current();
+      }
     });
 
     wavesurferRef.current = wavesurfer;
@@ -261,14 +276,19 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
   };
 
   const getRegions = () => {
-    // Map에서 직접 반환
-    const regions = Array.from(confirmedRegionsMapRef.current.values()).map(r => ({
-      id: r.id,
-      start: r.start,
-      end: r.end,
-      speakerId: r.speakerId,
-      speakerName: r.speakerName
-    }));
+    // 실제 region 객체의 현재 start/end 값을 읽어서 반환
+    // regionObject가 존재하지 않으면 필터링 (삭제된 region)
+    const allRegions = Array.from(confirmedRegionsMapRef.current.values());
+    
+    const regions = allRegions
+      .filter(r => r.regionObject) // 존재하는 region만
+      .map(r => ({
+        id: r.id,
+        start: r.regionObject.start, // region 객체의 현재 값
+        end: r.regionObject.end,     // region 객체의 현재 값
+        speakerId: r.speakerId,
+        speakerName: r.speakerName
+      }));
     
     return regions;
   };
@@ -340,7 +360,9 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated) => {
     // 기존 반복 정지
     stopRegionLoop();
 
-    const { start, end } = regionData;
+    // region 객체의 현재 start/end 값을 사용
+    const start = regionData.regionObject.start;
+    const end = regionData.regionObject.end;
     
     // 구간 시작 위치로 이동하고 재생
     wavesurferRef.current.seekTo(start / duration);
