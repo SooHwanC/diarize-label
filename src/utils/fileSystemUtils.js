@@ -154,3 +154,143 @@ export const formatFileSize = (bytes) => {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 };
 
+// 파일명 안전하게 변환 (특수문자 제거)
+const sanitizeFileName = (name) => {
+  return name.replace(/[<>:"/\\|?*]/g, '_').trim();
+};
+
+/**
+ * 화자별 폴더에 WAV 세그먼트 저장
+ * 구조: speakers/{화자이름}/{원본파일명}_{시작시간}_{종료시간}.wav
+ */
+export const saveSegmentsToSpeakerFolders = async (dirHandle, sourceFileName, segments, speakers) => {
+  try {
+    // speakers 폴더 생성 또는 가져오기
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: true });
+    
+    // 원본 파일명에서 확장자 제거
+    const baseName = sourceFileName.replace(/\.[^/.]+$/, '');
+    
+    const savedFiles = [];
+    
+    // 화자별로 그룹화
+    const segmentsBySpeaker = {};
+    for (const segment of segments) {
+      const speakerId = segment.speakerId;
+      if (!segmentsBySpeaker[speakerId]) {
+        segmentsBySpeaker[speakerId] = [];
+      }
+      segmentsBySpeaker[speakerId].push(segment);
+    }
+    
+    // 각 화자별로 폴더 생성 및 파일 저장
+    for (const [speakerId, speakerSegments] of Object.entries(segmentsBySpeaker)) {
+      const speaker = speakers.find(s => s.id === speakerId);
+      if (!speaker) continue;
+      
+      // 화자 이름으로 폴더 생성 (특수문자 제거)
+      const speakerFolderName = sanitizeFileName(speaker.name);
+      const speakerHandle = await speakersHandle.getDirectoryHandle(speakerFolderName, { create: true });
+      
+      // 해당 화자의 모든 세그먼트 저장
+      for (const segment of speakerSegments) {
+        // 파일명: 원본파일명_시작초_종료초.wav
+        const startStr = segment.start.toFixed(2).replace('.', '_');
+        const endStr = segment.end.toFixed(2).replace('.', '_');
+        const wavFileName = `${baseName}_${startStr}_${endStr}.wav`;
+        
+        // WAV 파일 저장
+        const wavFileHandle = await speakerHandle.getFileHandle(wavFileName, { create: true });
+        const wavWritable = await wavFileHandle.createWritable();
+        await wavWritable.write(segment.wavBlob);
+        await wavWritable.close();
+        
+        savedFiles.push({
+          speaker: speaker.name,
+          path: `speakers/${speakerFolderName}/${wavFileName}`,
+          duration: segment.duration
+        });
+      }
+    }
+    
+    return savedFiles;
+  } catch (err) {
+    console.error('Error saving segments to speaker folders:', err);
+    throw err;
+  }
+};
+
+/**
+ * 저장된 화자 폴더들의 통계 정보 가져오기
+ */
+export const getSpeakerFolderStats = async (dirHandle) => {
+  const stats = {};
+  
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    
+    for await (const entry of speakersHandle.values()) {
+      if (entry.kind === 'directory') {
+        let fileCount = 0;
+        let totalSize = 0;
+        
+        for await (const fileEntry of entry.values()) {
+          if (fileEntry.kind === 'file' && fileEntry.name.endsWith('.wav')) {
+            fileCount++;
+            const file = await fileEntry.getFile();
+            totalSize += file.size;
+          }
+        }
+        
+        stats[entry.name] = {
+          fileCount,
+          totalSize
+        };
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'NotFoundError') {
+      console.error('Error getting speaker folder stats:', err);
+    }
+  }
+  
+  return stats;
+};
+
+/**
+ * speakers 폴더에서 이미 처리된 원본 파일명 목록 가져오기
+ * WAV 파일명이 "원본파일명_시작초_종료초.wav" 형태이므로 원본 파일명 추출
+ */
+export const getProcessedFiles = async (dirHandle) => {
+  const processedSet = new Set();
+  
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    
+    for await (const speakerEntry of speakersHandle.values()) {
+      if (speakerEntry.kind === 'directory') {
+        for await (const fileEntry of speakerEntry.values()) {
+          if (fileEntry.kind === 'file' && fileEntry.name.endsWith('.wav')) {
+            // 파일명에서 원본 파일명 추출 (마지막 두 부분 _시작_종료.wav 제거)
+            // 예: call_001_0_00_3_50.wav -> call_001
+            const nameWithoutExt = fileEntry.name.replace('.wav', '');
+            const parts = nameWithoutExt.split('_');
+            
+            // 마지막 4개 파트가 시작/종료 시간 (0_00, 3_50 형태)
+            if (parts.length > 4) {
+              const baseName = parts.slice(0, -4).join('_');
+              processedSet.add(baseName);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'NotFoundError') {
+      console.error('Error getting processed files:', err);
+    }
+  }
+  
+  return processedSet;
+};
+

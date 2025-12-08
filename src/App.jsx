@@ -6,9 +6,8 @@ import { WaveformViewer } from './components/WaveformViewer';
 import { RegionsList } from './components/RegionsList';
 import { SavePanel } from './components/SavePanel';
 import { useSpeakers } from './hooks/useSpeakers';
-import { generateRTTM } from './utils/rttmExporter';
-import { selectFolder, getAudioFilesFromFolder, saveToDatasetFolder, loadExistingRTTM, getCompletedFiles } from './utils/fileSystemUtils';
-import { parseRTTM, mapSpeakersToRegions } from './utils/rttmParser';
+import { selectFolder, getAudioFilesFromFolder, saveSegmentsToSpeakerFolders, getSpeakerFolderStats, getProcessedFiles } from './utils/fileSystemUtils';
+import { extractAudioSegments } from './utils/audioUtils';
 
 function App() {
   // 폴더 관련 상태
@@ -26,10 +25,11 @@ function App() {
   const [fileName, setFileName] = useState('');
   const [regions, setRegions] = useState([]);
   const [loopingRegionId, setLoopingRegionId] = useState(null);
-  const [hasExistingLabel, setHasExistingLabel] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [speakerStats, setSpeakerStats] = useState({});
   const waveformRef = useRef(null);
   
-  const { speakers, selectedSpeaker, setSelectedSpeaker, addSpeaker, deleteSpeaker } = useSpeakers();
+  const { speakers, selectedSpeaker, setSelectedSpeaker, addSpeaker, updateSpeakerName, deleteSpeaker } = useSpeakers();
 
   // 폴더 선택 핸들러
   const handleFolderSelect = async () => {
@@ -40,8 +40,8 @@ function App() {
       // 오디오 파일 목록 가져오기 (먼저 처리)
       const files = await getAudioFilesFromFolder(dirHandle);
       
-      // 완료된 파일 목록 복원
-      const completedBasenames = await getCompletedFiles(dirHandle);
+      // 완료된 파일 목록 복원 (speakers 폴더에서 처리된 파일 확인)
+      const completedBasenames = await getProcessedFiles(dirHandle);
       const newCompletedFiles = new Set();
       
       // 오디오 파일명과 매칭 (확장자 제거해서 비교)
@@ -52,11 +52,15 @@ function App() {
         }
       });
       
+      // 화자별 폴더 통계 불러오기
+      const stats = await getSpeakerFolderStats(dirHandle);
+      
       // 모든 데이터 준비 완료 후 한번에 상태 업데이트
       setFolderHandle(dirHandle);
       setFolderName(dirHandle.name);
       setAudioFiles(files);
       setCompletedFiles(newCompletedFiles);
+      setSpeakerStats(stats);
       
       if (files.length > 0) {
         // 첫 번째 파일 자동 선택
@@ -91,49 +95,12 @@ function App() {
     // 상태 초기화
     setLoopingRegionId(null);
     setRegions([]);
-    setHasExistingLabel(false);
     
     // 새 파일 로드
     const fileInfo = files[index];
     setCurrentFileIndex(index);
     setAudioFile(fileInfo.file);
     setFileName(fileInfo.name);
-    
-    // 기존 RTTM 파일이 있는지 확인하고 불러오기
-    if (folderHandle) {
-      try {
-        const rttmContent = await loadExistingRTTM(folderHandle, fileInfo.name);
-        
-        if (rttmContent) {
-          // RTTM 파싱
-          const parsedRegions = parseRTTM(rttmContent);
-          
-          if (parsedRegions.length > 0) {
-            setHasExistingLabel(true);
-            
-            // 화자 정보와 매핑 (나중에 WaveSurfer ready 이벤트에서 처리)
-            // 일단 상태에 저장해둠
-            setTimeout(() => {
-              if (waveformRef.current && waveformRef.current.loadRegions) {
-                const speakersMap = new Map(speakers.map(s => [s.id, s]));
-                const mappedRegions = mapSpeakersToRegions(parsedRegions, speakers);
-                waveformRef.current.loadRegions(mappedRegions, speakersMap);
-                
-                // regions 상태도 업데이트
-                setTimeout(() => {
-                  if (handleRegionsChange) {
-                    handleRegionsChange();
-                  }
-                }, 100);
-              }
-            }, 500); // WaveSurfer가 로드될 시간을 줌
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load existing RTTM:', err);
-        // 에러가 있어도 계속 진행
-      }
-    }
   };
 
   const handleRegionsChange = useCallback(() => {
@@ -196,20 +163,23 @@ function App() {
       return;
     }
 
+    if (speakers.length === 0) {
+      alert('화자를 먼저 추가해주세요.');
+      return;
+    }
+
+    setIsSaving(true);
+
     try {
-      // RTTM 내용 생성
-      const baseName = fileName.replace(/\.[^/.]+$/, '');
-      const rttmContent = generateRTTM(baseName, regions, speakers);
+      // 오디오 구간 추출 (슬라이싱)
+      const segments = await extractAudioSegments(audioFile, regions);
       
-      // 오디오 파일을 Blob으로 변환
-      const audioBlob = audioFile;
-      
-      // dataset 폴더에 저장
-      const result = await saveToDatasetFolder(
+      // 화자별 폴더에 저장
+      const savedFiles = await saveSegmentsToSpeakerFolders(
         folderHandle,
         fileName,
-        audioBlob,
-        rttmContent
+        segments,
+        speakers
       );
       
       // 완료된 파일 목록에 추가
@@ -217,7 +187,25 @@ function App() {
       newCompletedFiles.add(fileName);
       setCompletedFiles(newCompletedFiles);
       
-      alert(`저장 완료!\n\n✅ ${result.audioPath}\n✅ ${result.rttmPath}`);
+      // 화자별 폴더 통계 업데이트
+      const stats = await getSpeakerFolderStats(folderHandle);
+      setSpeakerStats(stats);
+      
+      // 저장 결과 표시
+      const speakerSummary = {};
+      savedFiles.forEach(f => {
+        if (!speakerSummary[f.speaker]) {
+          speakerSummary[f.speaker] = { count: 0, duration: 0 };
+        }
+        speakerSummary[f.speaker].count++;
+        speakerSummary[f.speaker].duration += f.duration;
+      });
+      
+      const summaryText = Object.entries(speakerSummary)
+        .map(([name, data]) => `${name}: ${data.count}개 (${data.duration.toFixed(1)}초)`)
+        .join('\n');
+      
+      alert(`저장 완료! 총 ${savedFiles.length}개 파일\n\n${summaryText}`);
       
       // 다음 파일로 자동 이동
       if (currentFileIndex !== null && currentFileIndex < audioFiles.length - 1) {
@@ -232,6 +220,8 @@ function App() {
     } catch (err) {
       console.error('Failed to save:', err);
       alert('저장 중 오류가 발생했습니다.\n\n' + err.message);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -301,10 +291,10 @@ function App() {
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="px-8 py-6">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            RTTM 레이블링 도구
+            화자별 음성 레이블링 도구
           </h1>
           <p className="text-gray-600 mt-1">
-            pyannote 학습용 화자 다이어리제이션 데이터셋 생성
+            동일화자 감지 모델 파인튜닝을 위한 화자별 WAV 데이터셋 생성
           </p>
         </div>
       </header>
@@ -392,6 +382,7 @@ function App() {
                   selectedSpeaker={selectedSpeaker}
                   onSelectSpeaker={setSelectedSpeaker}
                   onAddSpeaker={addSpeaker}
+                  onUpdateSpeakerName={updateSpeakerName}
                   onDeleteSpeaker={deleteSpeaker}
                 />
 
@@ -414,6 +405,8 @@ function App() {
             <SavePanel
               fileName={fileName}
               regionCount={regions.length}
+              regions={regions}
+              speakers={speakers}
               onSave={handleSave}
               onClearAll={handleClearAll}
               onSkip={handleSkipFile}
@@ -421,8 +414,9 @@ function App() {
               totalFiles={audioFiles.length}
               completedCount={completedFiles.size}
               skippedCount={skippedFiles.size}
-              hasExistingLabel={hasExistingLabel}
               isSkipped={skippedFiles.has(fileName)}
+              isSaving={isSaving}
+              speakerStats={speakerStats}
             />
               </div>
             ) : (

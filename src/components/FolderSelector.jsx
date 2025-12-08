@@ -47,8 +47,8 @@ export const FolderSelector = ({ onFolderSelect, folderName }) => {
       </button>
 
       <div className="mt-6 text-sm text-gray-500">
-        <p>💡 선택한 폴더에 <strong>dataset/</strong> 폴더가 자동으로 생성됩니다</p>
-        <p className="mt-1">저장 구조: dataset/audio/ 및 dataset/rttm/</p>
+        <p>💡 선택한 폴더에 <strong>speakers/</strong> 폴더가 자동으로 생성됩니다</p>
+        <p className="mt-1">저장 구조: speakers/[화자이름]/*.wav</p>
       </div>
     </div>
   );
