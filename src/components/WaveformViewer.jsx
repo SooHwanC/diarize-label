@@ -4,11 +4,12 @@ import { useWaveSurfer } from '../hooks/useWaveSurfer';
 import { formatTime } from '../utils/audioUtils';
 import { SpeakerPopup } from './SpeakerPopup';
 
-export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange, onLoopingChange }, ref) => {
+export const WaveformViewer = forwardRef(({ audioFile, speakers, savedRegions, onRegionsChange, onLoopingChange }, ref) => {
   const containerRef = useRef(null);
   const [popupPosition, setPopupPosition] = useState(null);
   const [pendingRegion, setPendingRegion] = useState(null);
   const onRegionsChangeRef = useRef(onRegionsChange);
+  const hasLoadedSavedRegionsRef = useRef(false);
 
   // onRegionsChange 업데이트
   useEffect(() => {
@@ -23,7 +24,8 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
   const { 
     isPlaying, 
     currentTime, 
-    duration, 
+    duration,
+    isReady,
     playPause, 
     stop, 
     zoom,
@@ -74,6 +76,31 @@ export const WaveformViewer = forwardRef(({ audioFile, speakers, onRegionsChange
     stop,
     loadRegions
   }));
+
+  // 저장된 구간 자동 로드
+  useEffect(() => {
+    if (savedRegions && speakers.length > 0 && loadRegions && isReady && !hasLoadedSavedRegionsRef.current) {
+      // 화자 Map 생성
+      const speakersMap = new Map();
+      speakers.forEach(speaker => {
+        speakersMap.set(speaker.id, speaker);
+      });
+      
+      // 구간 로드
+      loadRegions(savedRegions, speakersMap);
+      hasLoadedSavedRegionsRef.current = true;
+      
+      // 구간 변경 이벤트 발생
+      if (onRegionsChange) {
+        onRegionsChange();
+      }
+    }
+  }, [savedRegions, speakers, loadRegions, isReady, onRegionsChange]);
+
+  // audioFile이 변경되면 로드 플래그 리셋
+  useEffect(() => {
+    hasLoadedSavedRegionsRef.current = false;
+  }, [audioFile]);
 
   useEffect(() => {
     if (!regionsPlugin) return;

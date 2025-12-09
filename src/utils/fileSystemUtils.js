@@ -160,6 +160,151 @@ const sanitizeFileName = (name) => {
 };
 
 /**
+ * 화자 폴더 이름 변경
+ */
+export const renameSpeakerFolder = async (dirHandle, oldSpeakerName, newSpeakerName) => {
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    
+    // 파일명 안전하게 변환
+    const oldFolderName = sanitizeFileName(oldSpeakerName);
+    const newFolderName = sanitizeFileName(newSpeakerName);
+    
+    // 같은 이름이면 변경할 필요 없음
+    if (oldFolderName === newFolderName) {
+      return true;
+    }
+    
+    // 기존 폴더가 있는지 확인
+    let oldFolderHandle;
+    try {
+      oldFolderHandle = await speakersHandle.getDirectoryHandle(oldFolderName, { create: false });
+    } catch (err) {
+      // 기존 폴더가 없으면 변경할 것도 없음 (첫 저장인 경우)
+      if (err.name === 'NotFoundError') {
+        return true;
+      }
+      throw err;
+    }
+    
+    // 새 폴더 생성
+    const newFolderHandle = await speakersHandle.getDirectoryHandle(newFolderName, { create: true });
+    
+    // 모든 파일 복사
+    for await (const entry of oldFolderHandle.values()) {
+      if (entry.kind === 'file') {
+        const file = await entry.getFile();
+        const newFileHandle = await newFolderHandle.getFileHandle(entry.name, { create: true });
+        const writable = await newFileHandle.createWritable();
+        await writable.write(file);
+        await writable.close();
+      }
+    }
+    
+    // 기존 폴더의 모든 파일 삭제
+    for await (const entry of oldFolderHandle.values()) {
+      if (entry.kind === 'file') {
+        await oldFolderHandle.removeEntry(entry.name);
+      }
+    }
+    
+    // 기존 폴더 삭제
+    await speakersHandle.removeEntry(oldFolderName);
+    
+    return true;
+  } catch (err) {
+    console.error('Error renaming speaker folder:', err);
+    throw err;
+  }
+};
+
+/**
+ * 화자 폴더 삭제
+ */
+export const deleteSpeakerFolder = async (dirHandle, speakerName) => {
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    
+    // 파일명 안전하게 변환
+    const folderName = sanitizeFileName(speakerName);
+    
+    // 폴더 가져오기
+    let folderHandle;
+    try {
+      folderHandle = await speakersHandle.getDirectoryHandle(folderName, { create: false });
+    } catch (err) {
+      // 폴더가 없으면 삭제할 것도 없음
+      if (err.name === 'NotFoundError') {
+        return true;
+      }
+      throw err;
+    }
+    
+    // 폴더 내 모든 파일 삭제
+    for await (const entry of folderHandle.values()) {
+      if (entry.kind === 'file') {
+        await folderHandle.removeEntry(entry.name);
+      }
+    }
+    
+    // 폴더 삭제
+    await speakersHandle.removeEntry(folderName);
+    
+    return true;
+  } catch (err) {
+    console.error('Error deleting speaker folder:', err);
+    throw err;
+  }
+};
+
+/**
+ * 특정 원본 파일에서 생성된 모든 세그먼트 파일 삭제
+ */
+export const deleteSegmentsBySourceFile = async (dirHandle, sourceFileName) => {
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    
+    // 원본 파일명에서 확장자 제거
+    const baseName = sourceFileName.replace(/\.[^/.]+$/, '');
+    
+    let deletedCount = 0;
+    
+    // 모든 화자 폴더 순회
+    for await (const speakerEntry of speakersHandle.values()) {
+      if (speakerEntry.kind === 'directory') {
+        // 각 화자 폴더 내의 파일들 확인
+        const filesToDelete = [];
+        
+        for await (const fileEntry of speakerEntry.values()) {
+          if (fileEntry.kind === 'file' && fileEntry.name.endsWith('.wav')) {
+            // 파일명이 원본 파일명으로 시작하는지 확인
+            // 예: call_001_0_00_3_50.wav는 call_001로 시작
+            if (fileEntry.name.startsWith(`${baseName}_`)) {
+              filesToDelete.push(fileEntry);
+            }
+          }
+        }
+        
+        // 파일 삭제
+        for (const fileEntry of filesToDelete) {
+          await speakerEntry.removeEntry(fileEntry.name);
+          deletedCount++;
+        }
+      }
+    }
+    
+    return deletedCount;
+  } catch (err) {
+    // speakers 폴더가 없으면 0 반환
+    if (err.name === 'NotFoundError') {
+      return 0;
+    }
+    console.error('Error deleting segments:', err);
+    throw err;
+  }
+};
+
+/**
  * 화자별 폴더에 WAV 세그먼트 저장
  * 구조: speakers/{화자이름}/{원본파일명}_{시작시간}_{종료시간}.wav
  */
@@ -170,6 +315,9 @@ export const saveSegmentsToSpeakerFolders = async (dirHandle, sourceFileName, se
     
     // 원본 파일명에서 확장자 제거
     const baseName = sourceFileName.replace(/\.[^/.]+$/, '');
+    
+    // 기존에 저장된 동일 원본 파일의 세그먼트 모두 삭제
+    await deleteSegmentsBySourceFile(dirHandle, sourceFileName);
     
     const savedFiles = [];
     
@@ -292,5 +440,75 @@ export const getProcessedFiles = async (dirHandle) => {
   }
   
   return processedSet;
+};
+
+/**
+ * 구간 메타데이터 저장
+ * 저장 위치: speakers/.metadata/{파일명}.json
+ */
+export const saveRegionsMetadata = async (dirHandle, fileName, regions) => {
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: true });
+    const metadataHandle = await speakersHandle.getDirectoryHandle('.metadata', { create: true });
+    
+    // 파일명에서 확장자 제거
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const metadataFileName = `${baseName}.json`;
+    
+    // 메타데이터 생성
+    const metadata = {
+      fileName: fileName,
+      baseName: baseName,
+      savedAt: new Date().toISOString(),
+      regions: regions.map(r => ({
+        id: r.id,
+        start: r.start,
+        end: r.end,
+        speakerId: r.speakerId,
+        speakerName: r.speakerName
+      }))
+    };
+    
+    // JSON 파일 저장
+    const fileHandle = await metadataHandle.getFileHandle(metadataFileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(metadata, null, 2));
+    await writable.close();
+    
+    return metadata;
+  } catch (err) {
+    console.error('Error saving regions metadata:', err);
+    throw err;
+  }
+};
+
+/**
+ * 구간 메타데이터 불러오기
+ * 저장 위치: speakers/.metadata/{파일명}.json
+ */
+export const loadRegionsMetadata = async (dirHandle, fileName) => {
+  try {
+    const speakersHandle = await dirHandle.getDirectoryHandle('speakers', { create: false });
+    const metadataHandle = await speakersHandle.getDirectoryHandle('.metadata', { create: false });
+    
+    // 파일명에서 확장자 제거
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const metadataFileName = `${baseName}.json`;
+    
+    // JSON 파일 읽기
+    const fileHandle = await metadataHandle.getFileHandle(metadataFileName, { create: false });
+    const file = await fileHandle.getFile();
+    const content = await file.text();
+    
+    const metadata = JSON.parse(content);
+    return metadata;
+  } catch (err) {
+    // 파일이 없으면 null 반환
+    if (err.name === 'NotFoundError') {
+      return null;
+    }
+    console.error('Error loading regions metadata:', err);
+    throw err;
+  }
 };
 

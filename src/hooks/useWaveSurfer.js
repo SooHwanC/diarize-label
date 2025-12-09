@@ -9,6 +9,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isReady, setIsReady] = useState(false); // WaveSurfer 준비 상태
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef(null);
   const tempRegionRef = useRef(null);
@@ -25,6 +26,9 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
 
   useEffect(() => {
     if (!containerRef.current || !audioFile) return;
+
+    // 초기화
+    setIsReady(false);
 
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
@@ -49,24 +53,28 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
     wavesurfer.on('ready', () => {
       const audioDuration = wavesurfer.getDuration();
       setDuration(audioDuration);
+      setIsReady(true); // WaveSurfer 준비 완료
       
       const container = containerRef.current;
       if (!container) return;
       
       const getTimeFromMouseEvent = (e) => {
-        // WaveSurfer의 getCurrentTime 메서드를 사용하여 정확한 시간 계산
+        // WaveSurfer의 wrapper 가져오기
         const wrapper = wavesurfer.getWrapper();
-        const scrollContainer = wrapper.parentElement;
         const bbox = wrapper.getBoundingClientRect();
-        const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
         
-        // 마우스 위치를 wrapper 기준으로 계산 (스크롤 포함)
+        // container 내부에서 실제로 스크롤이 일어나는 요소 찾기
+        // WaveSurfer는 보통 container > scroll-container > wrapper 구조
+        const scrollableParent = container.querySelector('[style*="overflow"]') || container;
+        const scrollLeft = scrollableParent.scrollLeft || 0;
+        
+        // 마우스의 실제 위치 계산 (뷰포트 기준 - wrapper 시작점 + 스크롤된 양)
         const relativeX = e.clientX - bbox.left + scrollLeft;
         
-        // wrapper의 실제 너비
+        // wrapper의 실제 전체 너비 (줌이 적용된)
         const wrapperWidth = wrapper.scrollWidth;
         
-        // 비율 계산
+        // 시간 계산
         const progress = Math.max(0, Math.min(1, relativeX / wrapperWidth));
         
         return progress * audioDuration;
@@ -364,6 +372,11 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
         regionObject: confirmedRegion
       });
     });
+    
+    // 구간 로드 후 변경 이벤트 발생
+    if (onRegionsChangeRef && onRegionsChangeRef.current) {
+      onRegionsChangeRef.current();
+    }
   };
 
   const playRegionLoop = (regionId) => {
@@ -421,6 +434,7 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
     isPlaying,
     currentTime,
     duration,
+    isReady,
     playPause: playPauseWithLoopStop,
     stop,
     zoom,

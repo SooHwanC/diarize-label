@@ -6,7 +6,7 @@ import { WaveformViewer } from './components/WaveformViewer';
 import { RegionsList } from './components/RegionsList';
 import { SavePanel } from './components/SavePanel';
 import { useSpeakers } from './hooks/useSpeakers';
-import { selectFolder, getAudioFilesFromFolder, saveSegmentsToSpeakerFolders, getSpeakerFolderStats, getProcessedFiles } from './utils/fileSystemUtils';
+import { selectFolder, getAudioFilesFromFolder, saveSegmentsToSpeakerFolders, getSpeakerFolderStats, getProcessedFiles, saveRegionsMetadata, loadRegionsMetadata, renameSpeakerFolder, deleteSpeakerFolder } from './utils/fileSystemUtils';
 import { extractAudioSegments } from './utils/audioUtils';
 
 function App() {
@@ -24,12 +24,94 @@ function App() {
   const [audioFile, setAudioFile] = useState(null);
   const [fileName, setFileName] = useState('');
   const [regions, setRegions] = useState([]);
+  const [savedRegions, setSavedRegions] = useState(null); // 저장된 구간 정보
   const [loopingRegionId, setLoopingRegionId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [speakerStats, setSpeakerStats] = useState({});
   const waveformRef = useRef(null);
   
-  const { speakers, selectedSpeaker, setSelectedSpeaker, addSpeaker, updateSpeakerName, deleteSpeaker } = useSpeakers();
+  const { speakers, selectedSpeaker, setSelectedSpeaker, addSpeaker, updateSpeakerName: updateSpeakerNameOriginal, deleteSpeaker: deleteSpeakerOriginal } = useSpeakers();
+
+  // 화자 이름 업데이트 (폴더 이름도 함께 변경)
+  const updateSpeakerName = async (speakerId, newName) => {
+    if (!newName.trim()) return;
+    
+    // 기존 화자 찾기
+    const speaker = speakers.find(s => s.id === speakerId);
+    if (!speaker) return;
+    
+    const oldName = speaker.name;
+    const trimmedNewName = newName.trim();
+    
+    // 이름이 같으면 변경할 필요 없음
+    if (oldName === trimmedNewName) return;
+    
+    // 상태 업데이트 (먼저)
+    updateSpeakerNameOriginal(speakerId, trimmedNewName);
+    
+    // 현재 파일의 구간에서 해당 화자를 사용하는 구간들의 이름도 업데이트
+    if (waveformRef.current && waveformRef.current.getRegions) {
+      const allRegions = waveformRef.current.getRegions();
+      allRegions.forEach(region => {
+        if (region.speakerId === speakerId) {
+          region.speakerName = trimmedNewName;
+        }
+      });
+      // 구간 변경 이벤트 발생하여 UI 업데이트
+      handleRegionsChange();
+    }
+    
+    // 폴더가 있으면 폴더 이름도 변경
+    if (folderHandle) {
+      try {
+        await renameSpeakerFolder(folderHandle, oldName, trimmedNewName);
+        
+        // 통계 업데이트
+        const stats = await getSpeakerFolderStats(folderHandle);
+        setSpeakerStats(stats);
+      } catch (err) {
+        console.error('Failed to rename speaker folder:', err);
+        // 폴더 변경 실패해도 상태는 이미 업데이트됨
+        // 다음 저장 시 새 이름으로 폴더가 생성됨
+      }
+    }
+  };
+
+  // 화자 삭제 (폴더도 함께 삭제)
+  const deleteSpeaker = async (speakerId) => {
+    // 화자 정보 가져오기 (삭제 전에)
+    const speaker = speakers.find(s => s.id === speakerId);
+    if (!speaker) return;
+    
+    // 현재 파일에서 사용 중인지 확인
+    const usedInRegions = regions.filter(r => r.speakerId === speakerId);
+    if (usedInRegions.length > 0) {
+      alert(`화자 "${speaker.name}"는 현재 ${usedInRegions.length}개 구간에서 사용 중입니다.\n\n먼저 해당 구간들을 삭제하거나 다른 화자로 변경해주세요.`);
+      return;
+    }
+    
+    // 확인 대화상자
+    if (!confirm(`화자 "${speaker.name}"를 삭제하시겠습니까?\n\n저장된 음성 파일도 함께 삭제됩니다.`)) {
+      return;
+    }
+    
+    // 상태에서 삭제
+    deleteSpeakerOriginal(speakerId);
+    
+    // 폴더도 삭제
+    if (folderHandle) {
+      try {
+        await deleteSpeakerFolder(folderHandle, speaker.name);
+        
+        // 통계 업데이트
+        const stats = await getSpeakerFolderStats(folderHandle);
+        setSpeakerStats(stats);
+      } catch (err) {
+        console.error('Failed to delete speaker folder:', err);
+        // 폴더 삭제 실패해도 상태는 이미 업데이트됨
+      }
+    }
+  };
 
   // 폴더 선택 핸들러
   const handleFolderSelect = async () => {
@@ -95,12 +177,25 @@ function App() {
     // 상태 초기화
     setLoopingRegionId(null);
     setRegions([]);
+    setSavedRegions(null);
     
     // 새 파일 로드
     const fileInfo = files[index];
     setCurrentFileIndex(index);
     setAudioFile(fileInfo.file);
     setFileName(fileInfo.name);
+    
+    // 완료된 파일이면 저장된 구간 정보 불러오기
+    if (folderHandle && completedFiles.has(fileInfo.name)) {
+      try {
+        const metadata = await loadRegionsMetadata(folderHandle, fileInfo.name);
+        if (metadata && metadata.regions) {
+          setSavedRegions(metadata.regions);
+        }
+      } catch (err) {
+        console.error('Failed to load saved regions:', err);
+      }
+    }
   };
 
   const handleRegionsChange = useCallback(() => {
@@ -181,6 +276,9 @@ function App() {
         segments,
         speakers
       );
+      
+      // 구간 메타데이터 저장
+      await saveRegionsMetadata(folderHandle, fileName, regions);
       
       // 완료된 파일 목록에 추가
       const newCompletedFiles = new Set(completedFiles);
@@ -390,6 +488,7 @@ function App() {
                   ref={waveformRef}
                   audioFile={audioFile}
                   speakers={speakers}
+                  savedRegions={savedRegions}
                   onRegionsChange={handleRegionsChange}
                   onLoopingChange={setLoopingRegionId}
                 />
