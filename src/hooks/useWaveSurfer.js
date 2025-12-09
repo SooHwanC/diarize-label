@@ -1,4 +1,4 @@
-// useWaveSurfer.js - 완전히 새로운 접근
+// useWaveSurfer.js - 줌 상태에서도 정확한 드래그 동작
 import { useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.js';
@@ -53,6 +53,25 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
       const container = containerRef.current;
       if (!container) return;
       
+      const getTimeFromMouseEvent = (e) => {
+        // WaveSurfer의 getCurrentTime 메서드를 사용하여 정확한 시간 계산
+        const wrapper = wavesurfer.getWrapper();
+        const scrollContainer = wrapper.parentElement;
+        const bbox = wrapper.getBoundingClientRect();
+        const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+        
+        // 마우스 위치를 wrapper 기준으로 계산 (스크롤 포함)
+        const relativeX = e.clientX - bbox.left + scrollLeft;
+        
+        // wrapper의 실제 너비
+        const wrapperWidth = wrapper.scrollWidth;
+        
+        // 비율 계산
+        const progress = Math.max(0, Math.min(1, relativeX / wrapperWidth));
+        
+        return progress * audioDuration;
+      };
+      
       const handleMouseDown = (e) => {
         if (e.target.classList.contains('wavesurfer-region') || 
             e.target.closest('.wavesurfer-region')) {
@@ -64,20 +83,14 @@ export const useWaveSurfer = (containerRef, audioFile, onRegionCreated, onRegion
         }
         
         isDraggingRef.current = true;
-        const rect = container.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const progress = x / rect.width;
-        dragStartRef.current = progress * audioDuration;
+        dragStartRef.current = getTimeFromMouseEvent(e);
       };
       
       const handleMouseMove = (e) => {
-        if (!isDraggingRef.current || !dragStartRef.current) return;
-        if (!regionsPluginRef.current) return; // regions가 있는지 확인
+        if (!isDraggingRef.current || dragStartRef.current === null) return;
+        if (!regionsPluginRef.current) return;
         
-        const rect = container.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const progress = Math.max(0, Math.min(1, x / rect.width));
-        const currentTime = progress * audioDuration;
+        const currentTime = getTimeFromMouseEvent(e);
         
         const start = Math.min(dragStartRef.current, currentTime);
         const end = Math.max(dragStartRef.current, currentTime);
